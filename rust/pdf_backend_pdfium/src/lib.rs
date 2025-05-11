@@ -162,5 +162,6 @@ fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
 fn pdf_backend_pdfium(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_plain_text, m)?)?;
     m.add_function(wrap_pyfunction!(rasteriser::render_page, m)?)?;
+    m.add_function(wrap_pyfunction!(rasteriser::page_count, m)?)?;
     Ok(())
 }

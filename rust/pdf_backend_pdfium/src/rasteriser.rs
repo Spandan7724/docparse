@@ -75,3 +75,18 @@ pub fn render_page<'py>(
 
     Ok((w, h, py_bytes))
 }
+
+/// Return the number of pages in the given PDF.
+#[pyfunction]
+pub fn page_count(path: &str) -> PyResult<usize> {
+    // 1. Bind to Pdfium
+    let pdfium = super::get_pdfium()?;
+
+    // 2. Load the document
+    let doc = pdfium
+        .load_pdf_from_file(Path::new(path), None)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to open PDF '{}': {}", path, e)))?;
+
+    // 3. pages().len() is a u16 under the hood; cast to usize
+    Ok(doc.pages().len() as usize)
+}
