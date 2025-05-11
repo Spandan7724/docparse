@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "rust/pdf_backend_pdfium",
+  "rust/structure_reasoner"
+]
+
+[profile.release]
+lto = true
+codegen-units = 1

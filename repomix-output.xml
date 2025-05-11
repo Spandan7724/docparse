@@ -1,0 +1,385 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+4. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+<additional_info>
+
+</additional_info>
+
+</file_summary>
+
+<directory_structure>
+.gitignore
+.python-version
+Cargo.toml
+pyproject.toml
+rust/pdf_backend_pdfium/Cargo.toml
+rust/pdf_backend_pdfium/src/lib.rs
+rust/structure_reasoner/Cargo.toml
+rust/structure_reasoner/src/lib.rs
+src/docparse/__init__.py
+src/docparse/__main__.py
+src/docparse/cli.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".gitignore">
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Rust
+target/
+
+# Wheels / build
+build/
+dist/
+*.egg-info/
+</file>
+
+<file path=".python-version">
+3.12
+</file>
+
+<file path="Cargo.toml">
+[workspace]
+members = [
+  "rust/pdf_backend_pdfium",
+  "rust/structure_reasoner"
+]
+
+[profile.release]
+lto = true
+codegen-units = 1
+</file>
+
+<file path="pyproject.toml">
+[project]
+name = "docparse"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "typer>=0.12",
+    "click>=8.1.7,<8.2.0"
+]
+
+[build-system]
+requires = ["maturin>=1.6"]
+build-backend = "maturin"
+
+
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.17,<2.0"]
+gpu = ["onnxruntime-gpu>=1.17,<2.0"]
+
+[tool.maturin]
+python-source    = "src"
+manifest-path    = "rust/pdf_backend_pdfium/Cargo.toml"
+features         = ["pyo3/extension-module"]
+
+
+[project.scripts]
+docparse = "docparse.cli:app"
+</file>
+
+<file path="rust/pdf_backend_pdfium/Cargo.toml">
+workspace.resolver = "2"
+
+[package]
+name    = "pdf_backend_pdfium"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]           # for Python FFI
+
+[dependencies]
+pyo3          = { version = "0.21", features = ["extension-module"] }
+once_cell     = "1.19"
+anyhow        = "1.0"
+pdfium-render = { version = "0.8.31", features = ["thread_safe", "sync"] }
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+</file>
+
+<file path="rust/pdf_backend_pdfium/src/lib.rs">
+use once_cell::sync::OnceCell;
+use pdfium_render::prelude::*;
+use pyo3::prelude::*;
+use serde::Serialize;
+use std::path::Path;
+
+// for singleton Pdfium instance
+static PDFIUM: OnceCell<Pdfium> = OnceCell::new();
+
+fn get_pdfium() -> &'static Pdfium {
+    PDFIUM.get_or_init(|| {
+        // try local DLL, else system
+        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
+            .or_else(|_| Pdfium::bind_to_system_library())
+            .map(Pdfium::new)
+            .expect("Unable to bind to any Pdfium library")
+    })
+}
+
+#[derive(Serialize, Clone)]
+struct CharInfo {
+    ch: char,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Serialize)]
+struct Line {
+    page: usize,
+    text: String,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+/// Extract text as one JSON-per-line, with bounding boxes
+#[pyfunction]
+fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
+    // load document
+    let doc = get_pdfium()
+        .load_pdf_from_file(Path::new(path), None)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+    let mut output = Vec::new();
+
+    for (page_idx, page) in doc.pages().iter().enumerate() {
+        // build a TextPage for char-level API
+        let text_page = page
+            .text()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        // collect all glyphs
+        let count = text_page.count_chars();
+        let mut chars = Vec::with_capacity(count as usize);
+
+        for idx in 0..count {
+            // unicode codepoint → Rust char
+            let uni = text_page.get_char_unicode(idx);
+            let ch = std::char::from_u32(uni).unwrap_or('\u{FFFD}');
+
+            // bounding box in PDF user-space
+            let (l, r, b, t) = {
+                let mut left = 0.0;
+                let mut right = 0.0;
+                let mut bottom = 0.0;
+                let mut top = 0.0;
+                text_page
+                    .get_char_box(idx, &mut left, &mut bottom, &mut right, &mut top);
+                (left, right, bottom, top)
+            };
+
+            chars.push(CharInfo {
+                ch,
+                x: l,
+                y: b,
+                width: r - l,
+                height: t - b,
+            });
+        }
+
+        // sort descending by y (top of page → first)
+        chars.sort_by(|a, b| b.y.partial_cmp(&a.y).unwrap());
+
+        // group into lines
+        let mut i = 0;
+        while i < chars.len() {
+            let baseline = chars[i].y;
+            let h = chars[i].height;
+            let mut line_group = Vec::new();
+            let mut j = i;
+
+            // any glyph within ±50% of line-height is same line
+            while j < chars.len() && (chars[j].y - baseline).abs() <= h * 0.5 {
+                line_group.push(chars[j].clone());
+                j += 1;
+            }
+            i = j;
+
+            // sort left→right
+            line_group.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+
+            // build text & detect inter-word gaps
+            let mut line_text = String::new();
+            let mut prev_end: Option<f64> = None;
+            for ci in &line_group {
+                if let Some(px) = prev_end {
+                    if ci.x - px > ci.width * 0.5 {
+                        line_text.push(' ');
+                    }
+                }
+                line_text.push(ci.ch);
+                prev_end = Some(ci.x + ci.width);
+            }
+
+            // compute bounding box of the line
+            let x0 = line_group.iter().map(|c| c.x).fold(f64::INFINITY, f64::min);
+            let y0 = line_group.iter().map(|c| c.y).fold(f64::INFINITY, f64::min);
+            let x1 = line_group
+                .iter()
+                .map(|c| c.x + c.width)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let y1 = line_group
+                .iter()
+                .map(|c| c.y + c.height)
+                .fold(f64::NEG_INFINITY, f64::max);
+
+            let line = Line {
+                page: page_idx + 1,
+                text: line_text,
+                x0,
+                y0,
+                x1,
+                y1,
+            };
+
+            // serialize to JSON string
+            output.push(serde_json::to_string(&line).unwrap());
+        }
+    }
+
+    Ok(output)
+}
+
+#[pymodule]
+fn pdf_backend_pdfium(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(extract_plain_text, m)?)?;
+    Ok(())
+}
+</file>
+
+<file path="rust/structure_reasoner/Cargo.toml">
+[package]
+name    = "structure_reasoner"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+</file>
+
+<file path="rust/structure_reasoner/src/lib.rs">
+use pyo3::prelude::*;
+
+#[pyfunction]
+fn placeholder() -> PyResult<&'static str> {
+    Ok("structure_reasoner placeholder")
+}
+
+#[pymodule]
+fn structure_reasoner(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(placeholder, m)?)?;
+    Ok(())
+}
+</file>
+
+<file path="src/docparse/__init__.py">
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("docparse")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
+try:
+    from pdf_backend_pdfium import extract_plain_text  # noqa: F401
+except ModuleNotFoundError:
+    # Rust backend not yet built
+    pass
+</file>
+
+<file path="src/docparse/__main__.py">
+# src/docparse/__main__.py
+from docparse.cli import app
+
+if __name__ == "__main__":
+    app()
+</file>
+
+<file path="src/docparse/cli.py">
+from pathlib import Path
+
+import typer
+from docparse import __version__
+
+try:
+    from pdf_backend_pdfium import extract_plain_text
+except ModuleNotFoundError:
+    extract_plain_text = None
+
+app = typer.Typer()
+
+
+@app.callback()
+def _main(version: bool = typer.Option(False, "--version", "-v", help="Show version")):
+    if version:
+        typer.echo(f"docparse {__version__}")
+        raise typer.Exit()
+
+
+@app.command()
+def text(path: Path):
+    """
+    Extract plain text per page (stub).
+    """
+    if extract_plain_text is None:
+        typer.echo("Rust backend not built; run `maturin develop`", err=True)
+        raise typer.Exit(1)
+    for json_line in extract_plain_text(str(path)):
+        typer.echo(json_line)
+</file>
+
+</files>
