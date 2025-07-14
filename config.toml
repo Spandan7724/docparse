@@ -1,0 +1,62 @@
+# Docparse Configuration File
+# This file contains default settings for docparse. 
+# Values can be overridden by environment variables (DOCPARSE_*) or CLI arguments.
+
+[text_extraction]
+# Character clustering parameters for grouping characters into lines
+line_clustering_tolerance = 0.25  # Fraction of character height for vertical clustering
+space_threshold_height = 0.20     # Height-based threshold for space insertion
+space_threshold_width = 0.40      # Width-based threshold for space insertion
+min_character_size = 0.0          # Minimum character dimensions to include
+
+[layout_detection]
+# Document layout analysis settings
+dpi = 224                                              # Default DPI for page rasterization
+model_path = "yolov8s-doclaynet.onnx"         # Path to ONNX layout model
+input_size = 1024                                     # Model input dimensions (square)
+confidence_threshold = 0.3                           # Minimum confidence for detections
+iou_threshold = 0.45                                  # IoU threshold for NMS
+padding_color = [114, 114, 114]                      # RGB padding color for preprocessing
+
+[rendering]
+# PDF rendering and image generation settings
+default_dpi = 224                                     # Default DPI for rendering
+points_per_inch = 72.0                               # PDF points to pixel conversion
+auto_rotate_landscape = false                        # Automatically rotate landscape pages
+
+[runtime]
+# ONNX runtime and execution settings
+execution_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]  # Preferred execution order
+thread_count = 0                                     # Number of threads (0 = auto)
+memory_limit_mb = 0                                  # Memory limit in MB (0 = unlimited)
+
+[paths]
+# File and directory paths
+pdfium_library_path = "./"                          # Directory containing libpdfium.so
+models_directory = "models/"                         # Directory for ML models
+cache_directory = ""                                 # Cache directory (empty = disable)
+
+[profiles]
+# Predefined configuration profiles for different document types
+
+[profiles.academic.layout_detection]
+# Optimized for academic papers
+confidence_threshold = 0.4
+dpi = 300
+
+[profiles.academic.text_extraction]
+line_clustering_tolerance = 0.20
+
+[profiles.forms.layout_detection]
+# Optimized for forms and structured documents  
+confidence_threshold = 0.5
+iou_threshold = 0.3
+dpi = 150
+
+[profiles.fast.layout_detection]
+# Fast processing with lower quality
+dpi = 150
+input_size = 512
+
+[profiles.fast.runtime]
+execution_providers = ["CPUExecutionProvider"]

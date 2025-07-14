@@ -10,3 +10,7 @@ target/
 build/
 dist/
 *.egg-info/
+CLAUDE.md
+tests.md
+CLAUDE.local.md
+.claude/

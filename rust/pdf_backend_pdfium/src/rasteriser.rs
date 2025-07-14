@@ -14,7 +14,7 @@ pub fn render_page<'py>(
     path: &str,
     page_index: usize,
     dpi: u32,
-) -> PyResult<(usize, usize, &'py PyBytes)> {
+) -> PyResult<(usize, usize, Bound<'py, PyBytes>)> {
     // 1. Get the Pdfium singleton
     let pdfium = super::get_pdfium()?;
 
@@ -71,7 +71,7 @@ pub fn render_page<'py>(
     let raw: Vec<u8> = img.into_raw();
 
     // 7. Wrap raw bytes in Python bytes object
-    let py_bytes = PyBytes::new(py, &raw);
+    let py_bytes = PyBytes::new_bound(py, &raw);
 
     Ok((w, h, py_bytes))
 }

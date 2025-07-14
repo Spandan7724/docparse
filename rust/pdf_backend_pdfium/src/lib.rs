@@ -1,5 +1,6 @@
 // src/lib.rs
 mod rasteriser;
+mod config;
 
 use once_cell::sync::OnceCell;
 use pdfium_render::prelude::{Pdfium, PdfiumError as PdfiumLibError};
@@ -13,8 +14,9 @@ static PDFIUM: OnceCell<Pdfium> = OnceCell::new();
 
 fn get_pdfium() -> PyResult<&'static Pdfium> {
     PDFIUM.get_or_try_init(|| {
+        let config = config::get_config();
         let bindings = Pdfium::bind_to_library(
-                Pdfium::pdfium_platform_library_name_at_path("./")
+                Pdfium::pdfium_platform_library_name_at_path(&config.paths.pdfium_library_path)
             )
             .or_else(|_| Pdfium::bind_to_system_library())
             .map_err(|e: PdfiumLibError| {
@@ -69,7 +71,8 @@ fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
             let w = rect.width().value;
             let h = rect.height().value;
 
-            if w <= 0.0 || h <= 0.0 {
+            let config = config::get_config();
+            if w <= config.text_extraction.min_character_size as f32 || h <= config.text_extraction.min_character_size as f32 {
                 continue;
             }
             chars_on_page.push(CharInfo { ch, x: l, y: b, width: w, height: h });
@@ -104,7 +107,8 @@ fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
                 }
                 let cand = &chars_on_page[j];
                 let cand_center = cand.y + cand.height / 2.0;
-                let tol = (anchor_h + cand.height) * 0.25;
+                let config = config::get_config();
+                let tol = (anchor_h + cand.height) * config.text_extraction.line_clustering_tolerance as f32;
                 if (cand_center - anchor_center).abs() < tol {
                     line_chars.push(cand.clone());
                     processed[j] = true;
@@ -120,8 +124,9 @@ fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
             for ci in &line_chars {
                 if let Some(px) = prev_end {
                     let gap = ci.x - px;
-                    let th_h = ci.height * 0.20;
-                    let th_w = ci.width * 0.40;
+                    let config = config::get_config();
+                    let th_h = ci.height * config.text_extraction.space_threshold_height as f32;
+                    let th_w = ci.width * config.text_extraction.space_threshold_width as f32;
                     if gap > th_h.max(th_w).max(1.0) {
                         text.push(' ');
                     }
@@ -158,10 +163,19 @@ fn extract_plain_text(path: &str) -> PyResult<Vec<String>> {
     Ok(all_lines_json)
 }
 
+#[pyfunction]
+fn init_config_with_profile(profile: Option<String>) -> PyResult<()> {
+    let profile_ref = profile.as_deref();
+    config::init_config(profile_ref).map_err(|e| {
+        PyRuntimeError::new_err(format!("Failed to initialize config: {}", e))
+    })
+}
+
 #[pymodule]
 fn pdf_backend_pdfium(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_plain_text, m)?)?;
     m.add_function(wrap_pyfunction!(rasteriser::render_page, m)?)?;
     m.add_function(wrap_pyfunction!(rasteriser::page_count, m)?)?;
+    m.add_function(wrap_pyfunction!(init_config_with_profile, m)?)?;
     Ok(())
 }
